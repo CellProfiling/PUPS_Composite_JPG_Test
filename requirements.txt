@@ -1,0 +1,23 @@
+torch==2.14.0
+torchvision==0.29.0
+fair-esm==2.0.0
+numpy==2.2.6
+pandas==2.3.3
+scikit-image==0.25.2
+scipy==1.15.3
+tifffile==2025.5.10
+pillow==12.3.0
+matplotlib==3.10.9
+requests==2.34.2
+lxml==6.1.3
+beautifulsoup4==4.15.0
+lightning==2.6.5
+
+# Needed only so that PUPS's own modules IMPORT. Do not prune these because nothing here
+# queries a database or fits a classifier — both are import-time dependencies of
+# PUPS_Code/src/dataset/dataset.py, which src/model/full_model.py imports for its CLASSES
+# list. MongoClient (dataset.py:66) and MultiLabelBinarizer (dataset.py:88) are both used
+# only inside a Dataset.__init__ that this pipeline never instantiates: we build our own
+# inputs in step 6. No MongoDB connection is ever opened.
+pymongo==4.18.0
+scikit-learn==1.7.2

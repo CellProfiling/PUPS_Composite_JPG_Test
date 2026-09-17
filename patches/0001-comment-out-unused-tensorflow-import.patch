@@ -1,0 +1,13 @@
+diff --git a/src/model/full_model.py b/src/model/full_model.py
+index 322ec97..4ce3bba 100644
+--- a/src/model/full_model.py
++++ b/src/model/full_model.py
+@@ -6,7 +6,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.absolute().parent))
+ print(str(pathlib.Path(__file__).parent.parent.absolute().parent))
+ 
+ # NOTE: Need to import tensorflow before pytorch lightning else protocol buffer runtime library miscongruencies
+-import tensorflow as tf  
++# import tensorflow as tf  # CHANGED-BY-US: unused (no `tf.` in this file); installing TensorFlow core-dumps alongside torch, which is the very protobuf clash their comment above warns about.
+ import torch
+ from torch import optim
+ import numpy as np

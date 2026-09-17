@@ -1,0 +1,379 @@
+--- a/1_HPA_Image_Download_BatchDownload.py
++++ b/1_HPA_Image_Download_BatchDownload.py
+@@ -7,8 +7,53 @@
+ Now with file existence checking and automatic retry for missing files.
+ """
+ 
++# =============================================================================================
++# MODIFIED COPY -- NOT the companion project's file. Do not sync this back upstream.
++# =============================================================================================
++# Original: cellprofiling/HPA_BleedThrough_Exploration @ 6225801e46409f9b8ab9e9274656c9dd25a5c4ad
++#           1_HPA_Image_Download_BatchDownload.py   (MIT)
++# Pristine copy kept alongside at ../Image_Preparation/ , which is never edited.
++#
++# WHY A LOCAL FORK RATHER THAN AN UPSTREAM CHANGE
++# -----------------------------------------------
++# This need is specific to reproducing PUPS's published figures, where a named field of view
++# either exists or the figure row is wrong. The companion project browses whatever HPA
++# currently publishes, so an archived-release fallback would be noise there. Keeping the change
++# here keeps that project's behaviour unsurprising.
++#
++# WHAT WAS CHANGED, AND WHY
++# -------------------------
++# `download_xml()` fetched https://www.proteinatlas.org/<ENSG>.xml -- the current release, with
++# no fallback -- and `parse_xml_for_images_with_antibody()` took every image URL from that one
++# document. When HPA withdraws an antibody's immunofluorescence data, the antibody is either
++# absent or present with zero <imageUrl> entries, so the loop finds nothing for it, prints no
++# line naming it, and the run EXITS 0. There is no notion of an expected set of fields of view,
++# so nothing can detect the gap.
++#
++# Confirmed 2026-09-05: N4BP2 antibody HPA036770 is listed in v25 with zero ICC/IF images, and
++# likewise in v19-v23. Only v18 still lists its U2OS fields of view 410_D12_1 and 410_D12_2 --
++# the ED Fig 5b N4BP2-201 (Holdout 2) row.
++#
++# Every change below is tagged `CHANGED-BY-US`. Eleven edits in seven places:
++#   1. HPA_ARCHIVE_VERSIONS / ARCHIVE_WALK_ALL_ANTIBODIES / HTTP_TIMEOUT   new constants
++#   2. normalize_cell_line()                                              new
++#   3. download_xml(..., hpa_version=None)                                new optional argument
++#   4. parse_xml_for_images_with_antibody()                               tolerant cell-line match
++#   5. list_antibodies_missing_if()                                       new
++#   6. extract_base_url()                                                 canonicalise archived URLs
++#   7. process_protein() / main()                                         the walk, and a real
++#                                                                         exit status
++# `0001-archived-release-fallback.patch` in this folder is the mechanical audit: applying it to
++# the pristine clone's file reproduces this file byte-for-byte, which
++# `4_Run_Image_Preparation.py` asserts on every run. README.md explains each hunk.
++#
++# NOT changed, deliberately: download_file()'s timeout=30 / no retry / bare-False return, and
++# the 13 bare `except:` clauses. Both are real defects, both are out of scope here.
++# =============================================================================================
++
+ import os
+ import re
++import sys
+ import requests
+ import gzip
+ import shutil
+@@ -18,6 +63,44 @@
+ from urllib.parse import urlparse
+ 
+ 
++# CHANGED-BY-US (1/7): new module constants.
++# HPA archived release hosts, newest first. `www` is the current release; these are consulted
++# only when the current release lists no ICC/IF images for an antibody, which happens when HPA
++# withdraws the immunofluorescence data for it. v24/v25 do not exist as separate hosts.
++HPA_ARCHIVE_VERSIONS = ['v23', 'v22', 'v21', 'v20', 'v19', 'v18', 'v17', 'v16', 'v15']
++
++# By default the archived releases are consulted only for antibodies that the current release
++# lists with no ICC/IF images at all -- the signature of withdrawn immunofluorescence data. Set
++# this to True to consult them for any antibody with no images in the requested cell line, which
++# recovers a per-cell-line withdrawal too but costs up to len(HPA_ARCHIVE_VERSIONS) extra XML
++# fetches for every gene that has an antibody never imaged in that cell line.
++ARCHIVE_WALK_ALL_ANTIBODIES = False
++
++# Unknown subdomains do not refuse the connection behind a proxy, they accept it and hang, so
++# every HTTP call needs an explicit timeout. (connect, read) seconds.
++HTTP_TIMEOUT = (10, 60)
++
++
++# CHANGED-BY-US (2/7): new helper. Cell line spellings are not stable between HPA
++#   releases, so a download list written against the current one matches nothing on an
++#   archived one unless the comparison is normalised.
++def normalize_cell_line(name):
++    """
++    Normalise a cell line name for comparison across HPA releases.
++
++    Cell line spellings are not stable between releases: 'U2OS' was 'U-2 OS' up to v20,
++    'U-251MG' was 'U-251 MG', 'Rh30' was 'RH-30'. Comparing on alphanumerics only makes a
++    download list written against the current release work against archived releases too.
++
++    Args:
++        name: Cell line name as written anywhere (list file or XML)
++
++    Returns:
++        str: Uppercase alphanumerics only (e.g., 'U-2 OS' -> 'U2OS')
++    """
++    return re.sub(r'[^A-Z0-9]', '', (name or '').upper())
++
++
+ def extract_protein_info(url):
+     """
+     Extract Ensembl ID and protein name from HPA URL.
+@@ -140,32 +223,40 @@
+         print(f"Annotation already exists: {anno_path}")
+ 
+ 
+-def download_xml(ensembl_id, protein_name):
++# CHANGED-BY-US (3/7): `hpa_version` added (None == the original behaviour exactly), and
++#   the request given a timeout -- it had none, and an unknown proteinatlas.org subdomain
++#   behind a proxy accepts the connection and hangs rather than refusing it.
++def download_xml(ensembl_id, protein_name, hpa_version=None):
+     """
+     Download the protein XML file from HPA.
+-    
++
+     Args:
+         ensembl_id: Ensembl gene identifier
+         protein_name: Name of the protein (for folder structure)
+-    
++        hpa_version: Archived release host such as 'v18', or None for the current release.
++                     Archived XMLs are cached under their own filename so they never shadow
++                     the current-release one.
++
+     Returns:
+         Path: Path to the downloaded XML file
+     """
+-    xml_url = f"https://www.proteinatlas.org/{ensembl_id}.xml"
+-    
++    host = 'www' if hpa_version is None else hpa_version
++    xml_url = f"https://{host}.proteinatlas.org/{ensembl_id}.xml"
++
+     # Save XML at the protein level (Gene name folder)
+     script_dir = Path(__file__).parent
+     protein_dir = script_dir / protein_name
+     protein_dir.mkdir(parents=True, exist_ok=True)
+-    xml_path = protein_dir / f"{ensembl_id}.xml"
+-    
++    xml_path = protein_dir / (f"{ensembl_id}.xml" if hpa_version is None
++                              else f"{ensembl_id}.{hpa_version}.xml")
++
+     # Check if XML already exists
+     if xml_path.exists():
+         print(f"XML already exists: {xml_path}")
+         return xml_path
+-    
++
+     print(f"Downloading XML from: {xml_url}")
+-    response = requests.get(xml_url)
++    response = requests.get(xml_url, timeout=HTTP_TIMEOUT)
+     response.raise_for_status()
+     
+     with open(xml_path, 'wb') as f:
+@@ -201,16 +292,28 @@
+     # Find all antibody elements
+     antibody_elements = root.xpath('.//antibody', namespaces=namespaces if namespaces else None)
+     
++    # CHANGED-BY-US (4/7): the cell line was matched by literal XPath equality,
++    #   `data[cellLine='{cell_line}']`. Now the data elements are iterated and compared
++    #   through normalize_cell_line(), so archived releases match too. Same result on the
++    #   current release. Also removes an unescaped f-string interpolation into XPath.
++    wanted = normalize_cell_line(cell_line)
++
+     for antibody in antibody_elements:
+         antibody_id = antibody.get('id')
+-        
+-        # XPath to find images for this antibody and cell line
+-        xpath_query = f".//cellExpression[@technology='ICC/IF']/subAssay/data[cellLine='{cell_line}']/assayImage/image[@imageType='sampleImage']/imageUrl"
+-        
+-        image_elements = antibody.xpath(xpath_query, namespaces=namespaces if namespaces else None)
+-        
+-        if image_elements:
+-            image_urls = [elem.text.strip() for elem in image_elements]
++
++        # The cell line is matched in Python rather than with `data[cellLine='...']` so that a
++        # release which spells it differently ('U-2 OS' for 'U2OS') still matches. See
++        # normalize_cell_line().
++        image_urls = []
++        for data in antibody.xpath(".//cellExpression[@technology='ICC/IF']/subAssay/data",
++                                   namespaces=namespaces if namespaces else None):
++            names = [t.strip() for t in data.xpath('./cellLine/text()')]
++            if not any(normalize_cell_line(n) == wanted for n in names):
++                continue
++            image_urls += [elem.text.strip() for elem in data.xpath(
++                "./assayImage/image[@imageType='sampleImage']/imageUrl")]
++
++        if image_urls:
+             antibody_images[antibody_id] = image_urls
+             print(f"  Found {len(image_urls)} images for antibody {antibody_id} in {cell_line}")
+     
+@@ -223,6 +326,41 @@
+     return antibody_images
+ 
+ 
++# CHANGED-BY-US (5/7): new helper -- the trigger for the walk below. It must be per
++#   ANTIBODY, not per gene: N4BP2 keeps two live U2OS antibodies alongside the withdrawn
++#   one, so a `if not antibody_images:` test never fires on the case it is meant for.
++def list_antibodies_missing_if(xml_path):
++    """
++    Antibody ids the XML lists with NO ICC/IF sample images in any cell line.
++
++    That is the signature of withdrawn immunofluorescence data: HPA keeps the antibody in the
++    record but its images are gone, so parse_xml_for_images_with_antibody() cannot see them and
++    the run would report success without them.
++
++    Restricting the archived-release walk to these keeps it cheap. An antibody that simply was
++    never imaged in the requested cell line still has ICC/IF images for other cell lines, so it
++    is not reported here and does not trigger a walk that could never succeed. Set
++    ARCHIVE_WALK_ALL_ANTIBODIES to widen this at the cost of up to len(HPA_ARCHIVE_VERSIONS)
++    extra XML fetches per gene.
++
++    Args:
++        xml_path: Path to the XML file
++
++    Returns:
++        list: Antibody ids in document order (e.g., ['HPA036770'])
++    """
++    root = etree.parse(str(xml_path)).getroot()
++    out = []
++    for ab in root.xpath('.//antibody'):
++        if not ab.get('id'):
++            continue
++        images = ab.xpath(".//cellExpression[@technology='ICC/IF']"
++                          "//image[@imageType='sampleImage']/imageUrl")
++        if ARCHIVE_WALK_ALL_ANTIBODIES or not images:
++            out.append(ab.get('id'))
++    return out
++
++
+ def extract_base_url(image_url):
+     """
+     Extract base URL from image URL by removing the file extension.
+@@ -235,7 +373,17 @@
+     """
+     # Remove _blue_red_green.jpg or similar suffix
+     base = re.sub(r'_blue_red_green\.jpg$', '', image_url)
+-    return base
++
++    # CHANGED-BY-US (6/7): rewrite an archived release's own host path to the
++    #   version-independent image host the current release already uses.
++    # An archived release serves its own host path, e.g.
++    #     http://v18.proteinatlas.org/images/36770/410_D12_1
++    # Rewrite it to the version-independent image host used by the current release, so there is
++    # one code path and the URL does not go stale when that release host is retired:
++    #     https://images.proteinatlas.org/36770/410_D12_1
++    base = re.sub(r'^https?://v\d+\.proteinatlas\.org/images/',
++                  'https://images.proteinatlas.org/', base)
++    return base.replace('http://', 'https://')
+ 
+ 
+ def download_file(url, output_path, skip_if_exists=True):
+@@ -466,13 +614,58 @@
+         
+         # Download XML (saved at protein level)
+         xml_path = download_xml(ensembl_id, protein_name)
+-        
++
+         # Parse XML for image URLs organized by antibody
+         antibody_images = parse_xml_for_images_with_antibody(xml_path, cell_line)
+-        
++
++        # CHANGED-BY-US (7/7): the fallback itself, plus process_protein() now returning a
++        #   bool so main() can tally skipped entries and exit non-zero. Previously a
++        #   skipped entry printed a line and the batch still finished with status 0.
++        # An antibody that the current release still LISTS but has no ICC/IF images for is the
++        # signature of withdrawn immunofluorescence data: the images are gone from this XML, so
++        # nothing here can see them and the run would report success without them. Consult the
++        # archived releases for exactly those antibodies, newest release first.
++        #
++        # Note the test is per antibody, not per gene: a gene can keep several live antibodies
++        # while one of them is withdrawn, which is the common case and would be missed by a
++        # `if not antibody_images` check.
++        pending = [a for a in list_antibodies_missing_if(xml_path)
++                   if a not in antibody_images]
++        if pending:
++            print(f"  Listed with no {cell_line} ICC/IF images in the current release: "
++                  f"{', '.join(pending)}")
++            print(f"  Checking archived releases for them")
++            for hpa_version in HPA_ARCHIVE_VERSIONS:
++                if not pending:
++                    break
++                try:
++                    archived_xml = download_xml(ensembl_id, protein_name,
++                                                hpa_version=hpa_version)
++                    archived = parse_xml_for_images_with_antibody(archived_xml, cell_line)
++                except requests.exceptions.RequestException as e:
++                    print(f"    {hpa_version}: {e}")
++                    continue
++                except etree.XMLSyntaxError as e:
++                    print(f"    {hpa_version}: unparseable response ({e})")
++                    continue
++                recovered = [a for a in pending if a in archived]
++                for antibody_id in recovered:
++                    antibody_images[antibody_id] = archived[antibody_id]
++                    print(f"    {hpa_version}: recovered {len(archived[antibody_id])} "
++                          f"image URL(s) for {antibody_id}")
++                if recovered:
++                    print(f"    NOTE: HPA keeps serving the JPGs for a withdrawn antibody but "
++                          f"returns HTTP 400 for <prefix>_<channel>.tif.gz, so expect the "
++                          f"16-bit TIFFs to be unavailable for these fields of view.")
++                pending = [a for a in pending if a not in recovered]
++            if pending:
++                print(f"  Not found in any archived release: {', '.join(pending)} "
++                      f"(most likely never imaged in {cell_line})")
++
+         if not antibody_images:
+-            print(f"No images found for {protein_name} in {cell_line}. Skipping.")
+-            return
++            print(f"No images found for {protein_name} in {cell_line} in the current release "
++                  f"or any of {len(HPA_ARCHIVE_VERSIONS)} archived releases. Skipping.")
++            return False
+         
+         # Download all images organized by antibody
+         for antibody_id, image_urls in antibody_images.items():
+@@ -517,11 +710,13 @@
+                             print(f"    ✗ Failed to download {ch}.tif after retry")
+         
+         print(f"\n✓ Completed {protein_name}")
+-        
++        return True
++
+     except Exception as e:
+         print(f"\n✗ Error processing {url}: {e}")
+         import traceback
+         traceback.print_exc()
++        return False
+ 
+ 
+ def read_download_list(file_path):
+@@ -562,7 +757,7 @@
+     if not download_list_path.exists():
+         print(f"\nError: Could not find {download_list_path}")
+         print("Please ensure Organelle_Example_GenesAndCellLines.txt is in the same directory as this script.")
+-        return
++        return 1
+     
+     try:
+         # Read the download list
+@@ -570,20 +765,35 @@
+         entries = read_download_list(download_list_path)
+         print(f"Found {len(entries)} entries to process")
+         
+-        # Process each entry
++        # Process each entry. Failures are collected rather than ignored: previously every
++        # skipped entry printed a line and the run still finished with status 0, so a batch
++        # could lose whole genes without anything downstream noticing.
++        failed = []
+         for idx, (note, link, cell_line) in enumerate(entries, 1):
+-            process_protein(note, link, cell_line, idx, len(entries))
+-        
++            if not process_protein(note, link, cell_line, idx, len(entries)):
++                failed.append((note, cell_line))
++
+         print("\n" + "=" * 70)
++        if failed:
++            print(f"DOWNLOADS FINISHED WITH {len(failed)} OF {len(entries)} ENTRIES SKIPPED")
++            for note, cell_line in failed:
++                print(f"  - {note}  ({cell_line})")
++            print(f"Files saved to: {script_dir}")
++            print("=" * 70)
++            return 1
+         print("ALL DOWNLOADS COMPLETE!")
+         print(f"Files saved to: {script_dir}")
+         print("=" * 70)
+-        
++        return 0
++
+     except Exception as e:
+         print(f"\nError: {e}")
+         import traceback
+         traceback.print_exc()
++        return 1
+ 
+ 
+ if __name__ == "__main__":
+-    main()
+\ No newline at end of file
++    # Propagate the status so a batch that skipped entries fails a pipeline step instead of
++    # looking like a clean run.
++    sys.exit(main())
+\ No newline at end of file

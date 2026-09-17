@@ -1,0 +1,39 @@
+# The 6 proteoform / cell-line pairs shown in PUPS Fig. 2c.
+#
+# Transcribed from the figure's row labels (Nature Methods 22:1265-1275, 2025).
+#
+# PROVENANCE IS UNIFORM AND EXCELLENT HERE. Fig. 2c caption, verbatim:
+#   "c, Our model predictions and the real images derived from the HPA are plotted for six
+#    randomly selected cells. The cell lines are indicated on the first row, and the stained
+#    proteins are on the second row. All proteins and cell lines used in this plot are held
+#    out from model training (Fig. 2a, holdout 1, Methods). All cell crops are 50 um x 50 um."
+#
+# So unlike the ExtFig5b set (cells IN training, proteins mixed across training/Holdout 1/2),
+# every protein AND every cell line here is held out -- Holdout 1 -- and the cells were
+# RANDOMLY selected rather than cherry-picked. That makes this the stronger of the two tracks
+# for any claim about generalisation, and it removes the "you chose easy images" objection
+# entirely. All six symbols begin A-D, consistent with the Methods A-G rule for Holdout 1.
+#
+# cell_line_hpa is the folder name HPA uses, which differs from the paper's label:
+#   paper "PC3"    -> HPA "PC-3"      (confirmed by the ExtFig5b download)
+#   paper "SHSY5Y" -> HPA "SH-SY5Y"   (VERIFY against the gene XML before downloading)
+#   paper "Rh30"   -> HPA "Rh30"      (already present in ../Images, so this spelling is right)
+#
+# GENE RENAME: the paper's "DUSP27" is now STYXL2 (ENSG00000198842) -- HGNC moved the symbol,
+# and separately the old DUPD1 became DUSP29, which is a DIFFERENT gene. Querying "DUSP27"
+# today returns three candidates; only ENSG00000198842 is the paper's gene. The alias column
+# carries STYXL2 and the resolver matches "DUSP27-203" to "STYXL2-203" on the transcript
+# number. Verified 2026-09-02.
+#
+# NOTE ON C9orf72: mixed case. The download script derives its folder name with
+# r'(ENSG\d+)-([A-Z0-9]+)', which would truncate it to "C9" and break the embedding lookup in
+# step 4. 0_Resolve_Paper_Targets.py emits an uppercased regex-safe symbol (C9ORF72) and keys
+# every artefact by it. Expect the folder to be named C9ORF72, not C9orf72.
+#
+transcript,gene,alias,cell_line_paper,cell_line_hpa,holdout_status,source,ensp_override,override_reason
+DUSP27-203,DUSP27,STYXL2,Rh30,Rh30,Holdout 1 (protein and cell line),Fig. 2c caption,ENSP00000404874,"HPA lists 3 STYXL2 proteoforms, named STYXL2-201/-202/-203 in every Ensembl release checked. DUSP27 was renamed STYXL2, and the transcript NUMBER is stable, so the paper's -203 is STYXL2-203. All three are 1158 aa."
+AMPD3-209,AMPD3,,PC3,PC-3,Holdout 1 (protein and cell line),Fig. 2c caption,,
+ALMS1-204,ALMS1,,Rh30,Rh30,Holdout 1 (protein and cell line),Fig. 2c caption,,resolved automatically from HPA /antibody v19-v22
+C1QL3-202,C1QL3,,SHSY5Y,SH-SY5Y,Holdout 1 (protein and cell line),Fig. 2c caption,ENSP00000480149,"HPA lists ENSP00000298943 (C1QL3-201) and ENSP00000480149. Archive lookup names the latter C1QL3-202, matching the paper's label. 213 aa; retired from current Ensembl, so the sequence comes from feb2023.rest.ensembl.org."
+DYNC1LI2-201,DYNC1LI2,,Rh30,Rh30,Holdout 1 (protein and cell line),Fig. 2c caption,,
+C9orf72-205,C9orf72,C9ORF72,PC3,PC-3,Holdout 1 (protein and cell line),Fig. 2c caption,,

@@ -1,0 +1,29 @@
+# The 9 proteoform / cell-line pairs shown in PUPS Extended Data Fig. 5b.
+#
+# Transcribed from the figure's row and column labels (Nature Methods 22:1265-1275, 2025).
+# holdout_status is quoted from the Supplementary Fig. 1-5 legends where the authors state it;
+# "training (inferred)" means the paper does NOT state it and we infer it from the Methods
+# alphabetical rule (training + Holdout 1 were built from genes beginning A-G).
+#
+# The ED Fig. 5 caption says these are "9 cells in both the training set and Holdout 1", so the
+# CELLS are seen data; the PROTEINS vary as recorded below.
+#
+# NOTE ON NAMES: transcript labels are Ensembl transcript names (GENE-2xx), NOT gene symbols --
+# they pin a specific splice isoform, so ESM-2 must use that isoform, not the Ensembl canonical
+# transcript. Two genes were renamed: PSME3IP1 was FAM192A / PIP30, MESD was MESDC2. If an HPA
+# or Ensembl lookup fails, try the alias.
+#
+# cell_line_hpa is the folder name HPA actually uses, which differs from the paper's label
+# (paper "U251MG" -> HPA "U-251MG"; paper "PC3" -> HPA "PC-3"). VERIFY these two before
+# downloading; they are the likely failure points.
+#
+transcript,gene,alias,cell_line_paper,cell_line_hpa,holdout_status,source
+ATP13A5-201,ATP13A5,,U2OS,U2OS,training (inferred),Methods A-G rule
+CHID1-203,CHID1,,U251MG,U-251MG,training (inferred),Methods A-G rule
+COPA-201,COPA,,U2OS,U2OS,training (inferred),Methods A-G rule
+DDIT3-205,DDIT3,,PC3,PC-3,Holdout 1 (test set),Supplementary Fig. 2 legend
+EIF4G1-202,EIF4G1,,U251MG,U-251MG,training (inferred),Methods A-G rule
+MESD-201,MESD,MESDC2,U2OS,U2OS,Holdout 2,Supplementary Fig. 3 legend
+N4BP2-201,N4BP2,,U2OS,U2OS,Holdout 2,Supplementary Fig. 4 legend
+PSME3IP1-217,PSME3IP1,FAM192A;PIP30,HeLa,HeLa,Holdout 2,Supplementary Fig. 4 legend
+RBM23-203,RBM23,,U251MG,U-251MG,Holdout 2,Supplementary Fig. 5 legend
